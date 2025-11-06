@@ -1,10 +1,10 @@
-name: proxy-access-portal
+name: medicare-form-portal
 region: nyc
 
 services:
   - name: web
     github:
-      repo: bbarnes4318/proxy
+      repo: bbarnes4318/medicare-form
       branch: main
       deploy_on_push: true
     
@@ -30,7 +30,17 @@ services:
       - key: PROXY_USERNAME
         value: "TmwjTsVQHgTiXElI"
       - key: PROXY_PASSWORD
-        value: "Topproducer2026_country-us_city-lasvegas_session-QNpU9Vlz_lifetime-168h"
+        value: "Topproducer2026_country-us_city-lasvegas_session-pv8aCbkq_lifetime-168h"
+      - key: GOOGLE_SHEETS_CREDENTIALS_JSON
+        value: "SET_IN_DIGITALOCEAN_DASHBOARD"
+      - key: GOOGLE_SHEETS_SPREADSHEET_ID
+        value: "1l48px8Sj9JiqbfW8aLgMeWMMGAVYQFjbKnZWZkVmDCE"
+      - key: GOOGLE_SHEETS_WORKSHEET_NAME
+        value: "medicare-form"
+      - key: LANDING_PAGE_URL
+        value: "https://lowinsurancecost.com"
+      - key: LANDING_PAGE_FORM_ENDPOINT
+        value: ""
     
     instance_count: 1
     instance_size_slug: basic-xxs

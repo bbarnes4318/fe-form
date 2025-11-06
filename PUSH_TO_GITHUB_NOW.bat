@@ -1,6 +1,6 @@
 @echo off
 echo ============================================
-echo Git Setup and Push to GitHub
+echo Pushing Medicare Form Portal to GitHub
 echo ============================================
 echo.
 
@@ -13,8 +13,10 @@ if errorlevel 1 (
     exit /b 1
 )
 
-echo Initializing Git repository...
-git init
+echo Initializing Git repository (if needed)...
+if not exist .git (
+    git init
+)
 
 echo.
 echo Adding all files to Git...
@@ -40,17 +42,18 @@ git push -u origin main --force
 echo.
 echo ============================================
 echo DONE! Your code is now on GitHub
+echo Repository: https://github.com/bbarnes4318/medicare-form
 echo ============================================
 echo.
-echo Next steps:
+echo Next steps for DigitalOcean:
 echo 1. Go to https://cloud.digitalocean.com/apps
 echo 2. Click "Create App"
-echo 3. Select your GitHub repository: bbarnes4318/medicare-form
-echo 4. DigitalOcean will auto-detect .do/app.yaml configuration
-echo 5. IMPORTANT: Set GOOGLE_SHEETS_CREDENTIALS_JSON in DigitalOcean dashboard
-echo 6. Click "Deploy" and wait 3-5 minutes
+echo 3. Connect GitHub repository: bbarnes4318/medicare-form
+echo 4. DigitalOcean will auto-detect .do/app.yaml
+echo 5. IMPORTANT: Set GOOGLE_SHEETS_CREDENTIALS_JSON in dashboard
+echo 6. Click "Deploy"
 echo.
-echo See DEPLOY_TO_DIGITALOCEAN.md for detailed instructions
+echo See DEPLOY_TO_DIGITALOCEAN.md for details
 echo ============================================
 
 pause

@@ -6,7 +6,25 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from functools import wraps
 import requests
 import os
+import json
+import uuid
 from datetime import datetime, timedelta
+
+# Load environment variables from .env file if it exists
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass  # python-dotenv not installed, skip .env loading
+
+# Google Sheets integration
+try:
+    import gspread
+    from google.oauth2.service_account import Credentials
+    GOOGLE_SHEETS_AVAILABLE = True
+except ImportError:
+    GOOGLE_SHEETS_AVAILABLE = False
+    print("Warning: Google Sheets libraries not installed. Form data will not be saved to Sheets.")
 
 app = Flask(__name__)
 # Use a consistent secret key for all workers
@@ -19,7 +37,7 @@ PROXY_CONFIG = {
     'host': os.environ.get('PROXY_HOST', 'geo.iproyal.com'),
     'port': int(os.environ.get('PROXY_PORT', '12321')),
     'username': os.environ.get('PROXY_USERNAME', 'TmwjTsVQHgTiXElI'),
-    'password': os.environ.get('PROXY_PASSWORD', 'Topproducer2026_country-us_city-lasvegas_session-QNpU9Vlz_lifetime-168h'),
+    'password': os.environ.get('PROXY_PASSWORD', 'Topproducer2026_country-us_city-lasvegas_session-pv8aCbkq_lifetime-168h'),
     'country': 'United States',
     'city': 'Las Vegas',
     'rotation': 'Sticky IP',
@@ -37,6 +55,19 @@ for i in range(1, 101):
 
 # Add admin account
 USERS['admin'] = generate_password_hash('admin123')
+
+# Google Sheets Configuration
+# Set these environment variables:
+# GOOGLE_SHEETS_CREDENTIALS_JSON - JSON string of service account credentials
+# GOOGLE_SHEETS_SPREADSHEET_ID - ID of the Google Spreadsheet
+# GOOGLE_SHEETS_WORKSHEET_NAME - Name of the worksheet (default: "Form Submissions")
+GOOGLE_SHEETS_CREDENTIALS_JSON = os.environ.get('GOOGLE_SHEETS_CREDENTIALS_JSON', '')
+GOOGLE_SHEETS_SPREADSHEET_ID = os.environ.get('GOOGLE_SHEETS_SPREADSHEET_ID', '')
+GOOGLE_SHEETS_WORKSHEET_NAME = os.environ.get('GOOGLE_SHEETS_WORKSHEET_NAME', 'medicare-form')
+
+# Landing page form submission URL
+LANDING_PAGE_URL = os.environ.get('LANDING_PAGE_URL', 'https://lowinsurancecost.com')
+LANDING_PAGE_FORM_ENDPOINT = os.environ.get('LANDING_PAGE_FORM_ENDPOINT', '')  # e.g., '/submit' or '/form-handler'
 
 def login_required(f):
     """Decorator to require login for certain routes"""
@@ -63,6 +94,268 @@ def get_proxy_dict():
     except Exception as e:
         # Return empty dict if proxy config fails
         return {}
+
+def generate_trustedform_certificate():
+    """Generate a TrustedForm certificate URL"""
+    # Generate a unique certificate ID
+    cert_id = str(uuid.uuid4()).replace('-', '')
+    # TrustedForm certificate URL format
+    cert_url = f"https://cert.trustedform.com/{cert_id}"
+    return cert_url
+
+def save_to_google_sheets(form_data, trustedform_url, proxy_ip=None, submission_status=None):
+    """Save form submission data to Google Sheets"""
+    if not GOOGLE_SHEETS_AVAILABLE or not GOOGLE_SHEETS_CREDENTIALS_JSON or not GOOGLE_SHEETS_SPREADSHEET_ID:
+        print("Google Sheets not configured. Skipping save.")
+        return False
+    
+    try:
+        # Parse credentials from JSON string
+        creds_dict = json.loads(GOOGLE_SHEETS_CREDENTIALS_JSON)
+        creds = Credentials.from_service_account_info(creds_dict)
+        scoped_creds = creds.with_scopes([
+            'https://www.googleapis.com/auth/spreadsheets',
+            'https://www.googleapis.com/auth/drive'
+        ])
+        
+        # Open the spreadsheet
+        client = gspread.authorize(scoped_creds)
+        spreadsheet = client.open_by_key(GOOGLE_SHEETS_SPREADSHEET_ID)
+        
+        # Get or create worksheet
+        try:
+            worksheet = spreadsheet.worksheet(GOOGLE_SHEETS_WORKSHEET_NAME)
+        except gspread.exceptions.WorksheetNotFound:
+            worksheet = spreadsheet.add_worksheet(title=GOOGLE_SHEETS_WORKSHEET_NAME, rows=1000, cols=20)
+            # Add headers if new worksheet
+            headers = [
+                'Timestamp', 'Agent', 'State', 'Zip Code', 'First Name', 'Last Name', 
+                'Phone', 'Email', 'Disclosure (TCPA Consent)', 'LeadID Token', 
+                'TrustedForm Certificate URL', 'TrustedForm Token', 'TrustedForm Ping URL', 
+                'Proxy IP', 'Submission Status', 'Landing Page Response'
+            ]
+            worksheet.append_row(headers)
+        
+        # Prepare row data matching landing page form structure
+        row_data = [
+            datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            session.get('username', 'Unknown'),
+            form_data.get('state', ''),
+            form_data.get('zip_code', ''),
+            form_data.get('first_name', ''),
+            form_data.get('last_name', ''),
+            form_data.get('phone', ''),
+            form_data.get('email', ''),
+            'Yes' if form_data.get('disclosure') else 'No',
+            '',  # LeadID token (will be added from submission if available)
+            trustedform_url,
+            trustedform_url,  # TrustedForm token (same as cert URL)
+            '',  # TrustedForm ping URL (will be added if available)
+            proxy_ip or 'N/A',
+            submission_status or 'Unknown',
+            ''  # Landing page response will be added if available
+        ]
+        
+        # Append row
+        worksheet.append_row(row_data)
+        print(f"Successfully saved form submission to Google Sheets")
+        return True
+        
+    except Exception as e:
+        print(f"Error saving to Google Sheets: {e}")
+        return False
+
+def submit_form_through_proxy(form_data, trustedform_url):
+    """Submit form to landing page through IPRoyal proxy"""
+    proxies = get_proxy_dict()
+    
+    if not proxies:
+        return {
+            'success': False,
+            'error': 'Proxy configuration not available'
+        }
+    
+    try:
+        # Determine the form submission endpoint
+        # Angular apps often submit to API endpoints like /api/submit, /api/leads, etc.
+        if LANDING_PAGE_FORM_ENDPOINT:
+            submit_url = f"{LANDING_PAGE_URL}{LANDING_PAGE_FORM_ENDPOINT}"
+        else:
+            # Try common Angular/API endpoints automatically
+            # We'll try multiple common patterns and see which one works
+            common_endpoints = [
+                '/api/submit',
+                '/api/leads',
+                '/api/form-submit',
+                '/submit',
+                '/api/contact',
+                '/api/lead',
+                '/form-submit',
+                '',  # Try base URL last (Angular routing)
+            ]
+            # Start with the first endpoint - we'll try others if this fails
+            submit_url = f"{LANDING_PAGE_URL}{common_endpoints[0]}"
+        
+        # Prepare form data matching landing page field names
+        # The landing page uses Angular form controls, so we match those exact names
+        payload = {
+            'state': form_data.get('state', ''),
+            'zip_code': form_data.get('zip_code', ''),
+            'first_name': form_data.get('first_name', ''),
+            'last_name': form_data.get('last_name', ''),
+            'phone': form_data.get('phone', ''),
+            'email': form_data.get('email', ''),
+            'disclosure': 'true' if form_data.get('disclosure') else '',  # TCPA consent checkbox
+        }
+        
+        # Add LeadID token (hidden field from landing page)
+        # Generate a UUID format similar to the landing page
+        leadid_token = str(uuid.uuid4()).upper()
+        payload['universal_leadid'] = leadid_token
+        
+        # Add TrustedForm fields (matching landing page format)
+        if trustedform_url:
+            payload['xxTrustedFormCertUrl'] = trustedform_url
+            payload['xxTrustedFormToken'] = trustedform_url
+            # Generate ping URL (TrustedForm ping URL format)
+            ping_url = trustedform_url.replace('cert.trustedform.com', 'ping.trustedform.com')
+            payload['xxTrustedFormPingUrl'] = ping_url
+        
+        # Headers to mimic a real browser and Angular app
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'application/json, text/plain, */*',  # Angular apps typically accept JSON
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Content-Type': 'application/json',  # Try JSON first (Angular apps often use JSON)
+            'Origin': LANDING_PAGE_URL,
+            'Referer': f'{LANDING_PAGE_URL}/',
+            'X-Requested-With': 'XMLHttpRequest',  # Indicates AJAX request
+        }
+        
+        # Try multiple endpoints and submission formats
+        # Angular apps can use different endpoints and formats
+        common_endpoints = [
+            LANDING_PAGE_FORM_ENDPOINT if LANDING_PAGE_FORM_ENDPOINT else '/api/submit',
+            '/api/leads',
+            '/api/form-submit',
+            '/submit',
+            '/api/contact',
+            '/api/lead',
+            '/form-submit',
+            '',  # Base URL (Angular routing)
+        ]
+        
+        response = None
+        last_error = None
+        
+        # Try each endpoint with both JSON and form-urlencoded
+        for endpoint in common_endpoints:
+            if endpoint:
+                test_url = f"{LANDING_PAGE_URL}{endpoint}"
+            else:
+                test_url = LANDING_PAGE_URL
+            
+            # Try JSON first (Angular apps typically use JSON)
+            try:
+                json_headers = headers.copy()
+                json_headers['Content-Type'] = 'application/json'
+                response = requests.post(
+                    test_url,
+                    json=payload,
+                    headers=json_headers,
+                    proxies=proxies,
+                    timeout=10,  # Shorter timeout for testing
+                    allow_redirects=True
+                )
+                # If we get a 200, 201, or 302, consider it successful
+                if response.status_code in [200, 201, 302]:
+                    submit_url = test_url  # Update submit_url to the working one
+                    break
+            except Exception as e:
+                last_error = e
+                pass
+            
+            # Try form-urlencoded if JSON didn't work
+            try:
+                form_headers = headers.copy()
+                form_headers['Content-Type'] = 'application/x-www-form-urlencoded'
+                response = requests.post(
+                    test_url,
+                    data=payload,
+                    headers=form_headers,
+                    proxies=proxies,
+                    timeout=10,
+                    allow_redirects=True
+                )
+                # If we get a 200, 201, or 302, consider it successful
+                if response.status_code in [200, 201, 302]:
+                    submit_url = test_url  # Update submit_url to the working one
+                    break
+            except Exception as e:
+                last_error = e
+                pass
+        
+        # If all endpoints failed, use the last error
+        if response is None:
+            error_msg = str(last_error) if last_error else 'Unknown error'
+            
+            # Check for proxy-specific errors
+            if '402' in error_msg or 'Payment Required' in error_msg:
+                error_msg = 'Proxy Error: 402 Payment Required. Your IPRoyal proxy account may need payment or the credentials may be expired. Please check your IPRoyal account status and update the proxy credentials.'
+            elif 'ProxyError' in error_msg or 'proxy' in error_msg.lower():
+                error_msg = f'Proxy Connection Error: {error_msg}. Please verify your IPRoyal proxy credentials are correct and the account is active.'
+            
+            return {
+                'success': False,
+                'error': f'Could not find working endpoint. {error_msg}',
+                'proxy_ip': None
+            }
+        
+        
+        # Get the proxy IP that was used
+        try:
+            ip_check_response = requests.get(
+                'https://ipv4.icanhazip.com',
+                proxies=proxies,
+                timeout=10
+            )
+            proxy_ip = ip_check_response.text.strip()
+        except Exception as ip_error:
+            # Check for proxy errors when getting IP
+            if '402' in str(ip_error) or 'Payment Required' in str(ip_error):
+                proxy_ip = 'Proxy Error: 402 Payment Required - Check IPRoyal account'
+            elif 'ProxyError' in str(ip_error):
+                proxy_ip = 'Proxy Connection Failed - Check credentials'
+            else:
+                proxy_ip = 'Unable to determine'
+        
+        return {
+            'success': response.status_code in [200, 201, 302],
+            'status_code': response.status_code,
+            'proxy_ip': proxy_ip,
+            'response_text': response.text[:500] if response.text else '',
+            'url': response.url
+        }
+        
+    except requests.exceptions.RequestException as e:
+        error_msg = str(e)
+        
+        # Provide helpful error messages for common proxy issues
+        if '402' in error_msg or 'Payment Required' in error_msg:
+            error_msg = 'Proxy Error: 402 Payment Required. Your IPRoyal proxy account may need payment or the credentials may be expired. Please check your IPRoyal account dashboard and ensure your account is active and has credits.'
+        elif 'ProxyError' in error_msg or 'proxy' in error_msg.lower():
+            error_msg = f'Proxy Connection Error: {error_msg}. Please verify your IPRoyal proxy credentials in app.py are correct and the account is active.'
+        elif '401' in error_msg or 'Unauthorized' in error_msg:
+            error_msg = 'Proxy Authentication Failed: Invalid username or password. Please check your IPRoyal proxy credentials.'
+        elif '403' in error_msg or 'Forbidden' in error_msg:
+            error_msg = 'Proxy Access Forbidden: Your IPRoyal account may not have permission to use this proxy or the IP may be blocked.'
+        
+        return {
+            'success': False,
+            'error': error_msg,
+            'proxy_ip': None
+        }
 
 @app.route('/')
 def index():
@@ -168,6 +461,62 @@ def documentation():
     return render_template('documentation.html',
                          username=session.get('username'),
                          proxy_config=PROXY_CONFIG)
+
+@app.route('/submit-form', methods=['GET', 'POST'])
+@login_required
+def submit_form():
+    """Form submission page for agents"""
+    if request.method == 'GET':
+        return render_template('submit_form.html',
+                             username=session.get('username'))
+    
+    # Handle form submission
+    try:
+        # Get form data matching landing page structure
+        form_data = {
+            'state': request.form.get('state', ''),
+            'zip_code': request.form.get('zip_code', ''),
+            'first_name': request.form.get('first_name', ''),
+            'last_name': request.form.get('last_name', ''),
+            'phone': request.form.get('phone', ''),
+            'email': request.form.get('email', ''),
+            'disclosure': request.form.get('disclosure', ''),  # TCPA consent checkbox
+        }
+        
+        # Generate or get TrustedForm certificate URL
+        trustedform_url = request.form.get('trustedform_cert_url')
+        if not trustedform_url:
+            trustedform_url = generate_trustedform_certificate()
+        
+        # Submit form through proxy
+        submission_result = submit_form_through_proxy(form_data, trustedform_url)
+        
+        # Save to Google Sheets
+        sheets_saved = save_to_google_sheets(
+            form_data=form_data,
+            trustedform_url=trustedform_url,
+            proxy_ip=submission_result.get('proxy_ip'),
+            submission_status='Success' if submission_result.get('success') else 'Failed'
+        )
+        
+        if submission_result.get('success'):
+            flash(f'Form submitted successfully! Proxy IP: {submission_result.get("proxy_ip", "N/A")}', 'success')
+            if sheets_saved:
+                flash('Data saved to Google Sheets successfully!', 'success')
+            else:
+                flash('Warning: Data could not be saved to Google Sheets. Check configuration.', 'warning')
+        else:
+            error_msg = submission_result.get('error', 'Unknown error')
+            flash(f'Form submission failed: {error_msg}', 'error')
+            # Still try to save to sheets even if submission failed
+            if sheets_saved:
+                flash('Form data saved to Google Sheets despite submission failure.', 'info')
+        
+        return redirect(url_for('submit_form'))
+        
+    except Exception as e:
+        flash(f'An error occurred: {str(e)}', 'error')
+        return redirect(url_for('submit_form'))
 
 if __name__ == '__main__':
     # Create templates directory if it doesn't exist

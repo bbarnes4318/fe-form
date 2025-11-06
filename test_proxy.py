@@ -7,7 +7,7 @@ import requests
 PROXY_HOST = "geo.iproyal.com"
 PROXY_PORT = 12321
 PROXY_USER = "TmwjTsVQHgTiXElI"
-PROXY_PASS = "Topproducer2026_country-us_city-lasvegas_session-QNpU9Vlz_lifetime-168h"
+PROXY_PASS = "Topproducer2026_country-us_city-lasvegas_session-pv8aCbkq_lifetime-168h"
 
 # Construct proxy URL
 proxy_url = f'http://{PROXY_USER}:{PROXY_PASS}@{PROXY_HOST}:{PROXY_PORT}'
@@ -43,14 +43,34 @@ def test_connection():
         return True
         
     except requests.exceptions.ProxyError as e:
-        print(f"\nPROXY ERROR:")
-        print(f"Could not connect to the proxy server.")
-        print(f"Details: {e}")
+        print(f"\n❌ PROXY ERROR:")
+        error_str = str(e)
+        
+        if '402' in error_str or 'Payment Required' in error_str:
+            print(f"⚠️  402 Payment Required - Your IPRoyal account needs payment or credentials expired")
+            print(f"\n📋 What to do:")
+            print(f"   1. Log into https://iproyal.com")
+            print(f"   2. Check your account balance/credits")
+            print(f"   3. Verify your proxy credentials are still valid")
+            print(f"   4. Update credentials in app.py if needed")
+        elif '401' in error_str or 'Unauthorized' in error_str:
+            print(f"⚠️  Authentication Failed - Invalid username or password")
+            print(f"\n📋 Check your proxy credentials in app.py")
+        elif '403' in error_str or 'Forbidden' in error_str:
+            print(f"⚠️  Access Forbidden - Account may not have permission")
+        else:
+            print(f"Could not connect to the proxy server.")
+        
+        print(f"\nDetails: {e}")
         return False
         
     except requests.exceptions.RequestException as e:
-        print(f"\nREQUEST ERROR:")
-        print(f"An error occurred: {e}")
+        print(f"\n❌ REQUEST ERROR:")
+        error_str = str(e)
+        if '402' in error_str or 'Payment Required' in error_str:
+            print(f"⚠️  402 Payment Required - Check your IPRoyal account")
+        else:
+            print(f"An error occurred: {e}")
         return False
     
     finally:
