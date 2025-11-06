@@ -143,9 +143,14 @@ def save_to_google_sheets(form_data, trustedform_url, proxy_ip=None, submission_
             json_str = json_str[2:-2] if json_str.endswith('\\"') else json_str[2:]
         
         # Replace escaped newlines with actual newlines for private key
-        # Handle both single and double escaping
-        json_str = json_str.replace('\\\\n', '\n')  # Double escaped
-        json_str = json_str.replace('\\n', '\n')     # Single escaped
+        # When DigitalOcean stores \\n, Python reads it as literal backslash-n (2 chars)
+        # We need to replace the literal backslash-n with actual newline
+        # Try multiple patterns to handle different storage formats
+        import re
+        # Replace literal \n (backslash followed by n) with actual newline
+        json_str = re.sub(r'\\n', '\n', json_str)
+        # Also handle if it was double-escaped (\\\\n becomes \\n in Python)
+        json_str = re.sub(r'\\\\n', '\n', json_str)
         
         # Try to parse JSON
         try:
