@@ -346,7 +346,9 @@ def submit_form_through_proxy(form_data, trustedform_url):
         last_error = None
         
         # Try each endpoint with both JSON and form-urlencoded
-        for endpoint in common_endpoints:
+        # Limit to first 3 endpoints to prevent timeout
+        endpoints_to_try = common_endpoints[:3]  # Only try first 3 endpoints
+        for endpoint in endpoints_to_try:
             if endpoint:
                 test_url = f"{LANDING_PAGE_URL}{endpoint}"
             else:
@@ -361,7 +363,7 @@ def submit_form_through_proxy(form_data, trustedform_url):
                     json=payload,
                     headers=json_headers,
                     proxies=proxies,
-                    timeout=10,  # Shorter timeout for testing
+                    timeout=5,  # Shorter timeout to prevent worker timeout
                     allow_redirects=True
                 )
                 print(f"DEBUG: Tried {test_url} (JSON) - Status: {response.status_code}")
@@ -386,7 +388,7 @@ def submit_form_through_proxy(form_data, trustedform_url):
                     data=payload,
                     headers=form_headers,
                     proxies=proxies,
-                    timeout=10,
+                    timeout=5,  # Shorter timeout
                     allow_redirects=True
                 )
                 print(f"DEBUG: Tried {test_url} (form-urlencoded) - Status: {response.status_code}")
@@ -606,31 +608,37 @@ def submit_form():
         trustedform_url = request.form.get('trustedform_cert_url', '').strip()
         # Only use if it's a valid TrustedForm URL (starts with https://cert.trustedform.com/)
         if trustedform_url and not trustedform_url.startswith('https://cert.trustedform.com/'):
-            trustedform_url = None  # Invalid format, don't use it
+            trustedform_url = ''  # Invalid format, use empty string
+        # If no TrustedForm URL, use empty string (not None) so Google Sheets doesn't break
+        if not trustedform_url:
+            trustedform_url = ''
         
         # Submit form through proxy
         submission_result = submit_form_through_proxy(form_data, trustedform_url)
         
-        # Save to Google Sheets
+        # Save to Google Sheets FIRST (before checking submission result)
+        # This ensures data is saved even if submission fails or times out
         sheets_saved = save_to_google_sheets(
             form_data=form_data,
-            trustedform_url=trustedform_url,
-            proxy_ip=submission_result.get('proxy_ip'),
-            submission_status='Success' if submission_result.get('success') else 'Failed'
+            trustedform_url=trustedform_url or '',  # Use empty string if None
+            proxy_ip=submission_result.get('proxy_ip') if submission_result else None,
+            submission_status='Success' if submission_result and submission_result.get('success') else 'Failed'
         )
         
-        if submission_result.get('success'):
+        if submission_result and submission_result.get('success'):
             flash(f'Form submitted successfully! Proxy IP: {submission_result.get("proxy_ip", "N/A")}', 'success')
             if sheets_saved:
                 flash('Data saved to Google Sheets successfully!', 'success')
             else:
                 flash('Warning: Data could not be saved to Google Sheets. Check configuration.', 'warning')
         else:
-            error_msg = submission_result.get('error', 'Unknown error')
+            error_msg = submission_result.get('error', 'Unknown error') if submission_result else 'Request timed out'
             flash(f'Form submission failed: {error_msg}', 'error')
             # Still try to save to sheets even if submission failed
             if sheets_saved:
                 flash('Form data saved to Google Sheets despite submission failure.', 'info')
+            else:
+                flash('Warning: Data could not be saved to Google Sheets. Check configuration.', 'warning')
         
         return redirect(url_for('submit_form'))
         
