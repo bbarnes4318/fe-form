@@ -8,6 +8,7 @@ import requests
 import os
 import json
 import uuid
+import re
 from datetime import datetime, timedelta
 
 # Load environment variables from .env file if it exists
@@ -146,7 +147,6 @@ def save_to_google_sheets(form_data, trustedform_url, proxy_ip=None, submission_
         # When DigitalOcean stores \\n, Python reads it as literal backslash-n (2 chars)
         # We need to replace the literal backslash-n with actual newline
         # Try multiple patterns to handle different storage formats
-        import re
         # Replace literal \n (backslash followed by n) with actual newline
         json_str = re.sub(r'\\n', '\n', json_str)
         # Also handle if it was double-escaped (\\\\n becomes \\n in Python)
