@@ -58,11 +58,11 @@ USERS['admin'] = generate_password_hash('admin123')
 # Google Sheets Configuration
 # Set these environment variables:
 # GOOGLE_SHEETS_CREDENTIALS_JSON - JSON string of service account credentials
-# GOOGLE_SHEETS_SPREADSHEET_ID - ID of the Google Spreadsheet
-# GOOGLE_SHEETS_WORKSHEET_NAME - Name of the worksheet (default: "Form Submissions")
+# GOOGLE_SHEETS_SPREADSHEET_ID - ID of the Google Spreadsheet (the spreadsheet itself should be named "fe-form")
+# GOOGLE_SHEETS_WORKSHEET_NAME - Name of the worksheet/tab inside the spreadsheet (default: "fe-form", NOT "Sheet1")
 GOOGLE_SHEETS_CREDENTIALS_JSON = os.environ.get('GOOGLE_SHEETS_CREDENTIALS_JSON', '')
 GOOGLE_SHEETS_SPREADSHEET_ID = os.environ.get('GOOGLE_SHEETS_SPREADSHEET_ID', '')
-GOOGLE_SHEETS_WORKSHEET_NAME = os.environ.get('GOOGLE_SHEETS_WORKSHEET_NAME', 'fe-form')
+GOOGLE_SHEETS_WORKSHEET_NAME = os.environ.get('GOOGLE_SHEETS_WORKSHEET_NAME', 'fe-form')  # Worksheet name, not Sheet1
 
 # Landing page submission removed - form data is only saved to Google Sheets
 
@@ -155,6 +155,8 @@ def save_to_google_sheets(form_data):
         if 'private_key' in creds_dict:
             # Replace literal \n (backslash-n) with actual newline
             creds_dict['private_key'] = creds_dict['private_key'].replace('\\n', '\n')
+            print(f"DEBUG: Private key length: {len(creds_dict['private_key'])}")
+            print(f"DEBUG: Private key starts with: {creds_dict['private_key'][:50]}")
         
         # Validate required fields
         required_fields = ['type', 'project_id', 'private_key', 'client_email']
@@ -163,19 +165,24 @@ def save_to_google_sheets(form_data):
             print(f"ERROR: Missing required fields in credentials: {missing_fields}")
             return False
         
+        print(f"DEBUG: Creating credentials from service account info...")
         creds = Credentials.from_service_account_info(creds_dict)
         scoped_creds = creds.with_scopes([
             'https://www.googleapis.com/auth/spreadsheets',
             'https://www.googleapis.com/auth/drive'
         ])
         
+        print(f"DEBUG: Authorizing gspread client...")
         # Open the spreadsheet
         client = gspread.authorize(scoped_creds)
+        print(f"DEBUG: Opening spreadsheet with ID: {GOOGLE_SHEETS_SPREADSHEET_ID}")
         spreadsheet = client.open_by_key(GOOGLE_SHEETS_SPREADSHEET_ID)
+        print(f"DEBUG: Spreadsheet opened successfully: {spreadsheet.title}")
         
-        # Get or create worksheet
+        # Get or create worksheet - ensure it's named "fe-form"
         try:
             worksheet = spreadsheet.worksheet(GOOGLE_SHEETS_WORKSHEET_NAME)
+            print(f"DEBUG: Found existing worksheet: {worksheet.title}")
             # Check if headers exist (check if first row is empty or doesn't match expected headers)
             first_row = worksheet.row_values(1)
             expected_headers = [
@@ -186,12 +193,16 @@ def save_to_google_sheets(form_data):
                 worksheet.insert_row(expected_headers, 1)
                 print("Added headers to existing worksheet")
         except gspread.exceptions.WorksheetNotFound:
+            print(f"DEBUG: Worksheet '{GOOGLE_SHEETS_WORKSHEET_NAME}' not found, creating it...")
+            # Create new worksheet with the correct name
             worksheet = spreadsheet.add_worksheet(title=GOOGLE_SHEETS_WORKSHEET_NAME, rows=1000, cols=20)
+            print(f"DEBUG: Created worksheet: {worksheet.title}")
             # Add headers if new worksheet
             headers = [
                 'Timestamp', 'First Name', 'Last Name', 'Phone', 'State', 'Age', 'Beneficiary'
             ]
             worksheet.append_row(headers)
+            print(f"DEBUG: Added headers to new worksheet")
         
         # Prepare row data with new fields
         row_data = [
@@ -204,6 +215,7 @@ def save_to_google_sheets(form_data):
             form_data.get('beneficiary', '')
         ]
         
+        print(f"DEBUG: Attempting to append row: {row_data}")
         # Append row
         worksheet.append_row(row_data)
         print(f"Successfully saved form submission to Google Sheets")
@@ -215,8 +227,11 @@ def save_to_google_sheets(form_data):
         print(f"JSON preview (first 100 chars): {GOOGLE_SHEETS_CREDENTIALS_JSON[:100]}")
         return False
     except Exception as e:
+        import traceback
         error_msg = str(e)
-        print(f"Error saving to Google Sheets: {error_msg}")
+        error_traceback = traceback.format_exc()
+        print(f"ERROR: Error saving to Google Sheets: {error_msg}")
+        print(f"ERROR: Full traceback:\n{error_traceback}")
         
         # Provide helpful error messages
         if "No key could be detected" in error_msg or "private_key" in error_msg.lower():
@@ -227,9 +242,13 @@ def save_to_google_sheets(form_data):
             print("3. Private key has \\n escaped as \\\\n (double backslash)")
         elif "WorksheetNotFound" in error_msg:
             print(f"Note: Worksheet '{GOOGLE_SHEETS_WORKSHEET_NAME}' will be created automatically")
-        elif "Permission denied" in error_msg.lower() or "403" in error_msg:
+        elif "Permission denied" in error_msg.lower() or "403" in error_msg or "access" in error_msg.lower():
             print("ERROR: Service account doesn't have access to the spreadsheet.")
             print("Please share the spreadsheet with the service account email.")
+        elif "JSON" in error_msg or "json" in error_msg.lower() or "parse" in error_msg.lower():
+            print("ERROR: JSON parsing failed. Check that GOOGLE_SHEETS_CREDENTIALS_JSON is valid JSON.")
+        elif "SPREADSHEET_ID" in error_msg or "spreadsheet" in error_msg.lower():
+            print("ERROR: Spreadsheet ID issue. Check GOOGLE_SHEETS_SPREADSHEET_ID is correct.")
         
         return False
 
@@ -237,10 +256,8 @@ def save_to_google_sheets(form_data):
 
 @app.route('/')
 def index():
-    """Home page - redirect to login or dashboard"""
-    if 'username' in session:
-        return redirect(url_for('dashboard'))
-    return redirect(url_for('login'))
+    """Home page - show form directly"""
+    return redirect(url_for('submit_form'))
 
 @app.route('/health')
 def health():
@@ -341,12 +358,10 @@ def documentation():
                          proxy_config=PROXY_CONFIG)
 
 @app.route('/submit-form', methods=['GET', 'POST'])
-@login_required
 def submit_form():
-    """Form submission page for agents"""
+    """Form submission page - no login required"""
     if request.method == 'GET':
-        return render_template('submit_form.html',
-                             username=session.get('username'))
+        return render_template('submit_form.html')
     
     # Handle form submission
     try:
