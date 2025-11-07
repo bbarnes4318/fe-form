@@ -165,6 +165,10 @@ def save_to_google_sheets(form_data):
             print(f"ERROR: Missing required fields in credentials: {missing_fields}")
             return False
         
+        # Extract service account email for error messages
+        service_account_email = creds_dict.get('client_email', 'UNKNOWN')
+        print(f"DEBUG: Service account email: {service_account_email}")
+        
         print(f"DEBUG: Creating credentials from service account info...")
         creds = Credentials.from_service_account_info(creds_dict)
         scoped_creds = creds.with_scopes([
@@ -176,7 +180,34 @@ def save_to_google_sheets(form_data):
         # Open the spreadsheet
         client = gspread.authorize(scoped_creds)
         print(f"DEBUG: Opening spreadsheet with ID: {GOOGLE_SHEETS_SPREADSHEET_ID}")
-        spreadsheet = client.open_by_key(GOOGLE_SHEETS_SPREADSHEET_ID)
+        try:
+            spreadsheet = client.open_by_key(GOOGLE_SHEETS_SPREADSHEET_ID)
+        except (PermissionError, gspread.exceptions.APIError) as pe:
+            # Check if it's a permission error (403)
+            is_403_error = False
+            if isinstance(pe, gspread.exceptions.APIError):
+                # APIError has response attribute with status_code
+                try:
+                    if hasattr(pe, 'response') and pe.response.status_code == 403:
+                        is_403_error = True
+                except:
+                    # If we can't check status code, assume it's a permission error based on the exception type
+                    is_403_error = True
+            
+            if is_403_error or isinstance(pe, PermissionError):
+                print("="*80)
+                print("ERROR: PERMISSION DENIED (403) - Service account cannot access the spreadsheet")
+                print("="*80)
+                print(f"\nSERVICE ACCOUNT EMAIL: {service_account_email}")
+                print(f"\nTO FIX THIS:")
+                print(f"1. Open your Google Spreadsheet: https://docs.google.com/spreadsheets/d/{GOOGLE_SHEETS_SPREADSHEET_ID}")
+                print(f"2. Click the 'Share' button (top right)")
+                print(f"3. Add this email address: {service_account_email}")
+                print(f"4. Give it 'Editor' permissions")
+                print(f"5. Click 'Send'")
+                print(f"\nAfter sharing, wait a few seconds and try submitting the form again.")
+                print("="*80)
+            raise
         print(f"DEBUG: Spreadsheet opened successfully: {spreadsheet.title}")
         
         # Get or create worksheet - ensure it's named "fe-form"
@@ -242,9 +273,30 @@ def save_to_google_sheets(form_data):
             print("3. Private key has \\n escaped as \\\\n (double backslash)")
         elif "WorksheetNotFound" in error_msg:
             print(f"Note: Worksheet '{GOOGLE_SHEETS_WORKSHEET_NAME}' will be created automatically")
-        elif "Permission denied" in error_msg.lower() or "403" in error_msg or "access" in error_msg.lower():
-            print("ERROR: Service account doesn't have access to the spreadsheet.")
-            print("Please share the spreadsheet with the service account email.")
+        elif "Permission denied" in error_msg.lower() or "403" in error_msg or "access" in error_msg.lower() or "PermissionError" in error_msg:
+            # Try to extract service account email from credentials if available
+            try:
+                json_str = GOOGLE_SHEETS_CREDENTIALS_JSON.strip()
+                if json_str.startswith('"') and json_str.endswith('"'):
+                    json_str = json_str[1:-1].replace('\\"', '"')
+                if json_str.startswith('\\"'):
+                    json_str = json_str[2:-2] if json_str.endswith('\\"') else json_str[2:]
+                creds_dict_temp = json.loads(json_str)
+                service_account_email = creds_dict_temp.get('client_email', 'UNKNOWN')
+            except:
+                service_account_email = 'UNKNOWN (check your credentials JSON)'
+            
+            print("="*80)
+            print("ERROR: PERMISSION DENIED - Service account cannot access the spreadsheet")
+            print("="*80)
+            print(f"\nSERVICE ACCOUNT EMAIL: {service_account_email}")
+            print(f"\nTO FIX THIS:")
+            print(f"1. Open your Google Spreadsheet: https://docs.google.com/spreadsheets/d/{GOOGLE_SHEETS_SPREADSHEET_ID}")
+            print(f"2. Click the 'Share' button (top right)")
+            print(f"3. Add this email address: {service_account_email}")
+            print(f"4. Give it 'Editor' permissions")
+            print(f"5. Click 'Send'")
+            print("="*80)
         elif "JSON" in error_msg or "json" in error_msg.lower() or "parse" in error_msg.lower():
             print("ERROR: JSON parsing failed. Check that GOOGLE_SHEETS_CREDENTIALS_JSON is valid JSON.")
         elif "SPREADSHEET_ID" in error_msg or "spreadsheet" in error_msg.lower():
